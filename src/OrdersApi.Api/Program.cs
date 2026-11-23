@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using OrdersApi.Api.Data;
+using OrdersApi.Api.Hubs;
 using OrdersApi.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -29,10 +30,17 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+builder.Services.AddSignalR();
+
+var postgres = builder.Configuration.GetConnectionString("Postgres");
 var sqlServer = builder.Configuration.GetConnectionString("SqlServer");
 builder.Services.AddDbContext<AppDbContext>(options =>
 {
-    if (!string.IsNullOrWhiteSpace(sqlServer))
+    if (!string.IsNullOrWhiteSpace(postgres))
+    {
+        options.UseNpgsql(postgres);
+    }
+    else if (!string.IsNullOrWhiteSpace(sqlServer))
     {
         options.UseSqlServer(sqlServer);
     }
@@ -62,6 +70,21 @@ builder.Services
             RoleClaimType = "role",
             NameClaimType = "email",
         };
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                // SignalR sends the token as a query string for WebSocket connections.
+                var accessToken = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(accessToken) &&
+                    context.HttpContext.Request.Path.StartsWithSegments("/hubs"))
+                {
+                    context.Token = accessToken;
+                }
+
+                return Task.CompletedTask;
+            },
+        };
     });
 
 builder.Services.AddAuthorization();
@@ -84,6 +107,7 @@ app.UseCors();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapHub<OrderHub>("/hubs/orders");
 
 app.MapGet("/health", async (AppDbContext db) =>
 {

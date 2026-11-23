@@ -1,8 +1,10 @@
-using Microsoft.AspNetCore.Authorization;
+﻿using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using OrdersApi.Api.Data;
 using OrdersApi.Api.Dtos;
+using OrdersApi.Api.Hubs;
 using OrdersApi.Api.Models;
 using OrdersApi.Api.Services;
 
@@ -10,7 +12,7 @@ namespace OrdersApi.Api.Controllers;
 
 [ApiController]
 [Route("api/orders")]
-public class OrdersController(AppDbContext db) : ControllerBase
+public class OrdersController(AppDbContext db, IHubContext<OrderHub> hub) : ControllerBase
 {
     [HttpPost]
     [Authorize]
@@ -70,12 +72,10 @@ public class OrdersController(AppDbContext db) : ControllerBase
         await db.SaveChangesAsync();
         await transaction.CommitAsync();
 
-        var dto = new OrderDto(
-            order.Id,
-            order.Status,
-            order.Total,
-            order.CreatedAt,
-            order.Items.Select(i => new OrderItemDto(i.ProductId, products[i.ProductId].Name, i.Quantity, i.UnitPrice)).ToList());
+        var dto = ToDto(order, products);
+        await hub.Clients
+            .Groups($"user-{order.UserId}", "admins")
+            .SendAsync("orderCreated", dto, HttpContext.RequestAborted);
 
         return Created($"/api/orders/{order.Id}", dto);
     }
@@ -96,7 +96,7 @@ public class OrdersController(AppDbContext db) : ControllerBase
             .OrderByDescending(o => o.CreatedAt)
             .ToListAsync();
 
-        return Ok(orders.Select(ToDto).ToList());
+        return Ok(orders.Select(o => ToDto(o)).ToList());
     }
 
     [HttpGet]
@@ -115,15 +115,51 @@ public class OrdersController(AppDbContext db) : ControllerBase
             .Take(pageSize)
             .ToListAsync();
 
-        return Ok(new PagedResponse<OrderDto>(orders.Select(ToDto).ToList(), page, pageSize, total));
+        return Ok(new PagedResponse<OrderDto>(orders.Select(o => ToDto(o)).ToList(), page, pageSize, total));
     }
 
-    private static OrderDto ToDto(Order order) => new(
+    [HttpPost("{id:int}/status")]
+    [Authorize(Roles = "admin")]
+    public async Task<ActionResult<OrderDto>> UpdateStatus(int id, UpdateOrderStatusRequest request)
+    {
+        var status = request.Status.Trim().ToLowerInvariant();
+        if (status is not ("pending" or "paid" or "cancelled"))
+        {
+            return BadRequest(new { error = "Status must be pending, paid or cancelled." });
+        }
+
+        var order = await db.Orders
+            .Include(o => o.Items).ThenInclude(i => i.Product)
+            .SingleOrDefaultAsync(o => o.Id == id);
+
+        if (order is null)
+        {
+            return NotFound();
+        }
+
+        order.Status = status;
+        await db.SaveChangesAsync();
+
+        var dto = ToDto(order);
+        await hub.Clients
+            .Groups($"user-{order.UserId}", "admins")
+            .SendAsync("orderStatusChanged", dto, HttpContext.RequestAborted);
+
+        return Ok(dto);
+    }
+
+    private static OrderDto ToDto(Order order, IReadOnlyDictionary<int, Product>? products = null) => new(
         order.Id,
         order.Status,
         order.Total,
         order.CreatedAt,
         order.Items
-            .Select(i => new OrderItemDto(i.ProductId, i.Product?.Name ?? "", i.Quantity, i.UnitPrice))
+            .Select(i => new OrderItemDto(
+                i.ProductId,
+                products is not null && products.TryGetValue(i.ProductId, out var product)
+                    ? product.Name
+                    : i.Product?.Name ?? "",
+                i.Quantity,
+                i.UnitPrice))
             .ToList());
 }

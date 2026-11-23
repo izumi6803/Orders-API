@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: orders-api
+    runtime: docker
+    plan: free
+    region: singapore
+    healthCheckPath: /health
+    envVars:
+      - key: Jwt__Key
+        generateValue: true
+      - key: ConnectionStrings__Postgres
+        fromDatabase:
+          name: orders-db
+          property: connectionString
+
+databases:
+  - name: orders-db
+    plan: free
+    databaseName: orders
+    user: orders

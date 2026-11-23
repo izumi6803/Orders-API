@@ -1,18 +1,19 @@
-# Orders API
+﻿# Orders API
 
 A small but complete ASP.NET Core REST API for an ordering/inventory flow (coworking products: day passes, meeting rooms, offices, coffee). Built as a portfolio project to practise the stack used in .NET outsource work: **ASP.NET Core, EF Core, SQL Server, JWT auth, Swagger, Docker and CI**.
 
 ## Features
 
-- **JWT auth** — register/login, 7-day tokens, BCrypt password hashing, role-based access (`admin` / `customer`).
-- **Products** — paged list with search, public read; create/update/delete restricted to admins; delete is a soft delete so order history stays valid.
-- **Orders** — create an order from product ids; stock is validated and decremented inside a DB transaction; customers see their own orders, admins see all (paged).
-- **Validation** — data annotations on all request DTOs; stock and product checks return clear 400/409 responses.
+- **JWT auth** â€” register/login, 7-day tokens, BCrypt password hashing, role-based access (`admin` / `customer`).
+- **Products** â€” paged list with search, public read; create/update/delete restricted to admins; delete is a soft delete so order history stays valid.
+- **Orders** â€” create an order from product ids; stock is validated and decremented inside a DB transaction; customers see their own orders, admins see all (paged).
+- **Validation** â€” data annotations on all request DTOs; stock and product checks return clear 400/409 responses.
 - **Swagger UI** with a Bearer token button at `/swagger`.
-- **Health check** at `/health` (process + database).
-- **Tests** — 6 xUnit tests covering order totals and rounding.
-- **CI** — GitHub Actions: restore, build, test on every push/PR.
-- **Docker** — multi-stage build producing a runtime image on port 8080.
+- **Realtime** — SignalR hub at /hubs/orders: orderCreated and orderStatusChanged events, scoped to the buyer and admins.
+- **Health check** at /health (process + database).
+- **Tests** â€” 6 xUnit tests covering order totals and rounding.
+- **CI** â€” GitHub Actions: restore, build, test on every push/PR.
+- **Docker** â€” multi-stage build producing a runtime image on port 8080.
 
 ## Stack
 
@@ -48,25 +49,29 @@ The database (`orders.db`, SQLite) is created and seeded on first start.
 
 | Method | Path | Auth | Description |
 | --- | --- | --- | --- |
-| POST | `/api/auth/register` | — | Create an account, returns a JWT |
-| POST | `/api/auth/login` | — | Log in, returns a JWT |
+| POST | `/api/auth/register` | â€” | Create an account, returns a JWT |
+| POST | `/api/auth/login` | â€” | Log in, returns a JWT |
 | GET | `/api/auth/me` | user | Current user |
-| GET | `/api/products?q=&page=&pageSize=` | — | Paged product list with search |
-| GET | `/api/products/{id}` | — | Product detail |
+| GET | `/api/products?q=&page=&pageSize=` | â€” | Paged product list with search |
+| GET | `/api/products/{id}` | â€” | Product detail |
 | POST | `/api/products` | admin | Create a product |
 | PUT | `/api/products/{id}` | admin | Update a product |
 | DELETE | `/api/products/{id}` | admin | Soft-delete a product |
 | POST | `/api/orders` | user | Create an order (validates and decrements stock) |
 | GET | `/api/orders/my` | user | My orders |
-| GET | `/api/orders?page=&pageSize=` | admin | All orders |
-| GET | `/health` | — | Health check |
+| GET | /api/orders?page=&pageSize= | admin | All orders |
+| POST | `/api/orders/{id}/status` | admin | Change status (`pending`/`paid`/`cancelled`), broadcasts `orderStatusChanged` |
+| WS | `/hubs/orders` | user | SignalR hub (`orderCreated`, `orderStatusChanged`) |
+| GET | `/health` | â€” | Health check |
 
 ## Configuration
 
 | Setting | Default | Notes |
 | --- | --- | --- |
 | `ConnectionStrings:Sqlite` | `Data Source=orders.db` | Used when no SQL Server string is set |
-| `ConnectionStrings:SqlServer` | *(empty)* | If set, the app uses the SQL Server provider instead |
+| ConnectionStrings:SqlServer | *(empty)* | If set, the app uses the SQL Server provider |
+| ConnectionStrings:Postgres | *(empty)* | If set (takes priority), the app uses PostgreSQL — used by 
+ender.yaml |
 | `Jwt:Key` | dev key in `appsettings.json` | **Replace** in any real deployment |
 | `Jwt:Issuer` / `Jwt:Audience` | `OrdersApi` | Token validation |
 
@@ -82,6 +87,43 @@ dotnet user-secrets set "ConnectionStrings:SqlServer" "Server=...;Database=Order
 ```bash
 docker build -t orders-api .
 docker run --rm -p 8080:8080 -e Jwt__Key="a-long-random-secret" orders-api
+```
+
+## Realtime (SignalR)
+
+Connect with the same JWT (the client sends it as `access_token`):
+
+```js
+import * as signalR from "@microsoft/signalr";
+
+const connection = new signalR.HubConnectionBuilder()
+  .withUrl("http://localhost:5000/hubs/orders", { accessTokenFactory: () => token })
+  .withAutomaticReconnect()
+  .build();
+
+connection.on("orderCreated", (order) => console.log("new order", order.id, order.total));
+connection.on("orderStatusChanged", (order) => console.log("status", order.status));
+await connection.start();
+```
+
+Buyers join `user-{id}`; admins join `admins`. Order creation and status changes are broadcast to both.
+
+## Deploy (Render)
+
+`render.yaml` provisions a Docker web service plus a free PostgreSQL database and wires `ConnectionStrings__Postgres` automatically.
+
+1. Push the repository to GitHub.
+2. Render Dashboard -> **New -> Blueprint** -> select the repository -> **Apply**.
+3. `Jwt__Key` is generated by Render; the health check is `/health`.
+
+The same image runs anywhere:
+
+```bash
+docker build -t orders-api .
+docker run --rm -p 8080:8080 \
+  -e Jwt__Key="a-long-random-secret" \
+  -e ConnectionStrings__Postgres="Host=...;Database=orders;Username=...;Password=..." \
+  orders-api
 ```
 
 ## Design decisions and tradeoffs
