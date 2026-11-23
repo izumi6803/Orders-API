@@ -1,0 +1,41 @@
+@OrdersApi.Api_HostAddress = http://localhost:5000
+
+### Health
+GET {{OrdersApi.Api_HostAddress}}/health
+
+### Register
+POST {{OrdersApi.Api_HostAddress}}/api/auth/register
+Content-Type: application/json
+
+{
+  "email": "new.user@example.com",
+  "name": "New User",
+  "password": "Secret123!"
+}
+
+### Login (admin)
+POST {{OrdersApi.Api_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@example.com",
+  "password": "Admin123!"
+}
+
+### Products
+GET {{OrdersApi.Api_HostAddress}}/api/products?page=1&pageSize=10
+
+### Create order (paste token from login)
+POST {{OrdersApi.Api_HostAddress}}/api/orders
+Content-Type: application/json
+Authorization: Bearer {{token}}
+
+{
+  "items": [
+    { "productId": 1, "quantity": 2 }
+  ]
+}
+
+### My orders
+GET {{OrdersApi.Api_HostAddress}}/api/orders/my
+Authorization: Bearer {{token}}
