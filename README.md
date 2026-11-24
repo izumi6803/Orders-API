@@ -126,6 +126,18 @@ docker run --rm -p 8080:8080 \
   orders-api
 ```
 
+## Benchmarks
+
+Local benchmark (Release build, \ASPNETCORE_ENVIRONMENT=Production\, SQLite, autocannon with 50 connections for 10 s):
+
+| Endpoint | req/s | p50 | p95 | p99 |
+| --- | --- | --- | --- | --- |
+| \GET /health\ | 6.7k | 6 ms | 13 ms | 17 ms |
+| \GET /api/products\ | 1.55k | 31 ms | 57 ms | 71 ms |
+| \GET /api/orders/my\ (auth) | 1.40k | 31 ms | 87 ms | 137 ms |
+
+The write path was excluded from this run because each request creates an order and depletes stock. Numbers are single-process SQLite; a SQL Server or PostgreSQL deployment would shift them.
+
 ## Design decisions and tradeoffs
 
 - **SQLite by default, SQL Server or PostgreSQL by config.** A reviewer can clone and run without installing anything, while the same EF Core model switches providers with one connection string. Tradeoff: no provider-specific tuning committed.
